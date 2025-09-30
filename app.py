@@ -19,12 +19,21 @@ def init_firebase():
         # Tenta carregar as credenciais do Streamlit Secrets (para deploy)
         key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
         creds = service_account.Credentials.from_service_account_info(key_dict)
-        firebase_admin.initialize_app(creds)
+        # Passa o project_id explicitamente para evitar o erro
+        firebase_admin.initialize_app(creds, {
+            'projectId': key_dict.get('project_id'),
+        })
     except (KeyError, json.JSONDecodeError):
         # Se falhar, tenta carregar do arquivo local (para rodar no seu PC)
         try:
-            cred = credentials.Certificate("firebase_key.json")
-            firebase_admin.initialize_app(cred)
+            # Carrega o arquivo JSON para um dicionário
+            with open('firebase_key.json') as f:
+                key_dict = json.load(f)
+            creds = service_account.Credentials.from_service_account_info(key_dict)
+             # Passa o project_id explicitamente para evitar o erro
+            firebase_admin.initialize_app(creds, {
+                'projectId': key_dict.get('project_id'),
+            })
         except FileNotFoundError:
             # Se nenhum dos dois funcionar, mostra o erro e para o app
             st.error("Erro fatal: Não foi possível encontrar as credenciais do Firebase.")
