@@ -6,11 +6,17 @@ from google.oauth2 import service_account
 import bcrypt
 from datetime import datetime, timedelta
 import os
+import pandas as pd
+import plotly.express as px
 
 # --- Configuração da Página ---
-st.set_page_config(layout="wide", page_title="Meu Diário Pessoal")
+st.set_page_config(
+    layout="wide",
+    page_title="Meu Diário Pessoal",
+    page_icon="📓"
+)
 
-# --- Conexão com Firebase ---
+# --- Conexão com Firebase (sem alterações) ---
 def init_firebase():
     """Inicializa a conexão com o Firebase de forma segura."""
     if firebase_admin._apps:
@@ -29,14 +35,14 @@ def init_firebase():
         st.stop()
     return firestore.client()
 
-# --- Funções de Autenticação ---
+# --- Funções de Autenticação (sem alterações) ---
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
-# --- Funções de Lógica de Hábitos ---
+# --- Funções de Lógica de Hábitos (sem alterações) ---
 def calculate_streaks(habit_logs, habit_name):
     """Calcula a sequência atual e a maior sequência para um hábito."""
     if not habit_logs:
@@ -92,13 +98,13 @@ def calculate_streaks(habit_logs, habit_name):
 
     return current_streak, longest_streak
 
-# --- Funções de Interface das Abas ---
+# --- Funções de Interface das Abas (com melhorias) ---
 
 def render_habits_and_tasks(db, username):
-    st.header("Hábitos e Tarefas")
+    st.header("💪 Hábitos e Tarefas")
 
     # --- HÁBITOS ---
-    st.subheader("💪 Monitoramento de Hábitos")
+    st.subheader("Monitoramento de Hábitos")
     
     # Gerenciamento de Hábitos
     habits_ref = db.collection('users').document(username).collection('habits_config')
@@ -118,7 +124,6 @@ def render_habits_and_tasks(db, username):
             if st.button("Remover Hábito Selecionado", type="primary"):
                 if habit_to_delete:
                     habits_ref.document(habit_to_delete).delete()
-                    # Opcional: remover dos logs também (pode ser lento)
                     st.warning(f"Hábito '{habit_to_delete}' removido.")
                     st.rerun()
 
@@ -237,13 +242,26 @@ def render_mood(db, username):
 
     st.divider()
 
-    # Histórico de Humor
+    # Histórico de Humor com Gráficos
     st.subheader("🗓️ Histórico de Humor e Diário")
     all_moods_ref = db.collection('users').document(username).collection('mood_log').order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
     
+    all_moods_data = []
     for mood_doc in all_moods_ref:
         data = mood_doc.to_dict()
-        with st.expander(f"**{mood_doc.id}** - Humor: **{data.get('mood', 'N/A')}**"):
+        data['date'] = mood_doc.id
+        all_moods_data.append(data)
+
+    if all_moods_data:
+        df = pd.DataFrame(all_moods_data)
+        
+        # Gráfico de Pizza
+        mood_counts = df['mood'].value_counts()
+        fig_pie = px.pie(mood_counts, values=mood_counts.values, names=mood_counts.index, title="Distribuição de Humor")
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    for data in all_moods_data:
+        with st.expander(f"**{data['date']}** - Humor: **{data.get('mood', 'N/A')}**"):
             st.write(data.get('journal', '*Nenhum diário escrito.*'))
 
 def render_future_upgrades():
@@ -251,11 +269,18 @@ def render_future_upgrades():
     st.info("Esta área é um espaço reservado para futuras funcionalidades incríveis!")
     st.markdown("""
     Algumas ideias para o futuro:
-    - Gráficos de análise de humor e hábitos.
+    - Gráficos de análise de hábitos.
     - Metas de longo prazo.
     - Monitoramento de finanças.
     - Integração com calendários.
     """)
+    with st.form("suggestion_form", clear_on_submit=True):
+        st.write("Tem uma ideia para uma nova funcionalidade? Deixe sua sugestão!")
+        suggestion = st.text_area("Sua sugestão:")
+        submitted = st.form_submit_button("Enviar Sugestão")
+        if submitted and suggestion:
+            # Aqui você pode adicionar a lógica para salvar a sugestão em um banco de dados
+            st.success("Obrigado pela sua sugestão!")
 
 # --- Lógica Principal e Telas ---
 
@@ -266,7 +291,7 @@ def main_app(db, username):
         st.session_state.username = ""
         st.rerun()
     
-    st.title("Meu Diário Pessoal de Acompanhamento")
+    st.title("📓 Meu Diário Pessoal de Acompanhamento")
     
     tab1, tab2, tab3 = st.tabs(["Hábitos e Tarefas", "Meu Humor", "Futuros Upgrades"])
 
@@ -315,4 +340,3 @@ if st.session_state.logged_in:
     main_app(db, st.session_state.username)
 else:
     login_screen(db)
-
