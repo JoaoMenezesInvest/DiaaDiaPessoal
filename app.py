@@ -6,63 +6,31 @@ from google.oauth2 import service_account
 import bcrypt
 from datetime import datetime
 
-# --- CÓDIGO DE DIAGNÓSTICO ---
-# Este bloco irá nos mostrar o que o Streamlit está lendo nos Secrets.
-st.set_page_config(layout="wide")
-st.write("--- INÍCIO DO DIAGNÓSTICO DE SECRETS ---")
-
-try:
-    # Mostra todas as chaves de secrets que o Streamlit encontrou.
-    st.write("Secrets encontrados:", list(st.secrets.keys()))
-
-    if "FIREBASE_SERVICE_ACCOUNT_KEY" in st.secrets:
-        st.success("✅ Secret 'FIREBASE_SERVICE_ACCOUNT_KEY' foi encontrado!")
-        
-        # Tenta carregar o JSON para ver se o conteúdo é válido.
-        try:
-            key_content = st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"]
-            key_dict = json.loads(key_content)
-            st.success("✅ O conteúdo do secret é um JSON válido.")
-            st.write("Project ID encontrado no secret:", key_dict.get("project_id"))
-        except json.JSONDecodeError:
-            st.error("❌ ERRO: O conteúdo do secret foi encontrado, mas NÃO é um JSON válido. Verifique se copiou e colou corretamente.")
-        except Exception as e:
-            st.error(f"❌ ERRO ao processar o JSON: {e}")
-            
-    else:
-        st.error("❌ ERRO CRÍTICO: Secret 'FIREBASE_SERVICE_ACCOUNT_KEY' NÃO foi encontrado.")
-        st.warning("Verifique se o nome do secret nas configurações do Streamlit está IDÊNTICO (maiúsculas e minúsculas).")
-
-except Exception as e:
-    st.error(f"Ocorreu um erro ao tentar acessar os secrets: {e}")
-
-st.write("--- FIM DO DIAGNÓSTICO ---")
-# --- FIM DO CÓDIGO DE DIAGNÓSTICO ---
-
+# Configuração da página
+st.set_page_config(layout="wide", page_title="Meu Diário Pessoal")
 
 # Função para inicializar o Firebase
 def init_firebase():
     """Inicializa a conexão com o Firebase usando credenciais do Streamlit Secrets ou de um arquivo local."""
     if firebase_admin._apps:
         return firestore.client()
+    
     try:
         # Tenta carregar as credenciais do Streamlit Secrets (para deploy)
         key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
         creds = service_account.Credentials.from_service_account_info(key_dict)
         firebase_admin.initialize_app(creds)
-        st.session_state.firebase_initialized = True
     except (KeyError, json.JSONDecodeError):
         # Se falhar, tenta carregar do arquivo local (para rodar no seu PC)
         try:
-            if not firebase_admin._apps:
-                cred = credentials.Certificate("firebase_key.json")
-                firebase_admin.initialize_app(cred)
-                st.session_state.firebase_initialized = True
+            cred = credentials.Certificate("firebase_key.json")
+            firebase_admin.initialize_app(cred)
         except FileNotFoundError:
-            # Se nenhum dos dois funcionar, mostra o erro e as instruções
-            if "firebase_initialized" not in st.session_state:
-                 # Mensagens de erro já são mostradas pelo bloco de diagnóstico
-                st.stop()
+            # Se nenhum dos dois funcionar, mostra o erro e para o app
+            st.error("Erro fatal: Não foi possível encontrar as credenciais do Firebase.")
+            st.info("Para rodar localmente, coloque seu arquivo 'firebase_key.json' na mesma pasta do app.py.")
+            st.info("Para deploy, adicione as credenciais no segredo [FIREBASE_SERVICE_ACCOUNT_KEY] do Streamlit Cloud.")
+            st.stop()
     
     return firestore.client()
 
@@ -110,10 +78,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.username = ""
 
 # Tenta inicializar o Firebase
-try:
-    db = init_firebase()
-except Exception:
-    db = None
+db = init_firebase()
 
 # Tela de Login / Cadastro
 def login_screen(db):
@@ -227,8 +192,8 @@ def main_app(db):
             st.rerun()
             
 # --- Lógica Principal ---
-if db and not st.session_state.logged_in:
+if not st.session_state.logged_in:
     login_screen(db)
-elif db and st.session_state.logged_in:
+else:
     main_app(db)
 
