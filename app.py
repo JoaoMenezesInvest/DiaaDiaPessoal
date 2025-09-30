@@ -11,21 +11,139 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
+# Configurações iniciais para uma aparência de tela cheia e um ícone personalizado.
 st.set_page_config(
     layout="wide",
     page_title="Meu Diário Pessoal",
-    page_icon="📓"
+    page_icon="✨"
 )
+
+# --- CSS CUSTOMIZADO PARA UMA UI/UX PREMIUM ---
+# Esta seção injeta um CSS complexo para transformar completamente a aparência do Streamlit.
+def load_custom_css():
+    st.markdown("""
+        <style>
+            /* --- FONTES E TEMA GERAL --- */
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+            
+            html, body, [class*="st-"] {
+                font-family: 'Inter', sans-serif;
+            }
+
+            .stApp {
+                background-color: #121212; /* Fundo escuro profundo */
+                color: #E0E0E0;
+            }
+
+            h1, h2, h3, h4, h5, h6 {
+                color: #FFFFFF !important;
+                font-weight: 700;
+            }
+
+            /* --- SIDEBAR --- */
+            [data-testid="stSidebar"] {
+                background-color: #1E1E1E;
+                border-right: 1px solid #2A2A2A;
+            }
+
+            /* --- ABAS DE NAVEGAÇÃO --- */
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 24px;
+                border-bottom: 1px solid #2A2A2A;
+            }
+            .stTabs [data-baseweb="tab"] {
+                padding: 12px 16px;
+                background-color: transparent;
+                border: none;
+                color: #A0A0A0;
+                font-weight: 500;
+                transition: all 0.2s ease-in-out;
+            }
+            .stTabs [data-baseweb="tab"]:hover {
+                color: #FFFFFF;
+                background-color: #2A2A2A;
+            }
+            .stTabs [aria-selected="true"] {
+                color: #FFFFFF;
+                border-bottom: 3px solid #00A86B; /* Verde como cor de destaque */
+            }
+
+            /* --- CARDS E CONTAINERS --- */
+            .st-emotion-cache-1r6slb0, [data-testid="stForm"] {
+                background-color: #1E1E1E;
+                border: 1px solid #2A2A2A;
+                border-radius: 12px;
+                padding: 24px;
+                transition: box-shadow 0.3s ease, transform 0.2s ease;
+            }
+            .st-emotion-cache-1r6slb0:hover {
+                box-shadow: 0 8px 30px rgba(0, 168, 107, 0.1);
+                transform: translateY(-3px);
+            }
+            
+            /* --- BOTÕES --- */
+            .stButton>button {
+                border-radius: 8px;
+                border: 1px solid #00A86B;
+                background-color: transparent;
+                color: #00A86B;
+                font-weight: 600;
+                padding: 10px 16px;
+                transition: all 0.2s ease;
+            }
+            .stButton>button:hover {
+                background-color: #00A86B;
+                color: #FFFFFF;
+                border-color: #00A86B;
+            }
+            .stButton>button:focus {
+                box-shadow: 0 0 0 3px rgba(0, 168, 107, 0.5) !important;
+            }
+            .stButton>button[kind="primary"] { /* Botão de Ação Destrutiva (Remover) */
+                border-color: #C62828;
+                color: #C62828;
+            }
+             .stButton>button[kind="primary"]:hover {
+                background-color: #C62828;
+                color: white;
+            }
+
+            /* --- MÉTRICAS --- */
+            [data-testid="stMetric"] {
+                background-color: #1E1E1E;
+                border: 1px solid #2A2A2A;
+                border-radius: 12px;
+                padding: 20px;
+            }
+
+            /* --- INPUTS, SELECTBOX, TEXTAREA --- */
+            [data-testid="stTextInput"] input, 
+            [data-testid="stSelectbox"] div[data-baseweb="select"],
+            [data-testid="stTextArea"] textarea {
+                background-color: #2A2A2A;
+                border: 1px solid #444;
+                color: #E0E0E0;
+                border-radius: 8px;
+            }
+
+            /* --- POPOVER --- */
+            [data-testid="stPopover"] {
+                background-color: #2A2A2A;
+                border-radius: 8px;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+load_custom_css()
+
 
 # --- CONEXÃO COM FIREBASE (CACHEADO) ---
 @st.cache_resource
 def init_firebase():
     """Inicializa a conexão com o Firebase de forma segura usando cache."""
     try:
-        # Carrega as credenciais a partir dos segredos do Streamlit
         key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
         creds = service_account.Credentials.from_service_account_info(key_dict)
-        # Inicializa o app Firebase apenas se não houver um app existente
         if not firebase_admin._apps:
             firebase_admin.initialize_app(creds)
     except (KeyError, json.JSONDecodeError) as e:
@@ -36,42 +154,29 @@ def init_firebase():
 
 # --- FUNÇÕES DE AUTENTICAÇÃO ---
 def hash_password(password):
-    """Gera o hash de uma senha."""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
 def check_password(password, hashed):
-    """Verifica se a senha corresponde ao hash."""
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
 # --- LÓGICA DE DADOS (COM CACHE) ---
-# O cache melhora drasticamente a performance, evitando buscas repetidas ao banco de dados.
 @st.cache_data(ttl=300)
 def get_all_logs(_db, username):
-    """Busca todos os logs de hábitos para um usuário (cache de 5 min)."""
     logs_ref = _db.collection('users').document(username).collection('habits_log').stream()
     return {doc.id: doc.to_dict() for doc in logs_ref}
 
 @st.cache_data(ttl=300)
 def get_mood_logs(_db, username):
-    """Busca todos os logs de humor para um usuário (cache de 5 min)."""
     moods_ref = _db.collection('users').document(username).collection('mood_log').order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
-    all_moods_data = []
-    for doc in moods_ref:
-        data = doc.to_dict()
-        data['date'] = doc.id
-        all_moods_data.append(data)
+    all_moods_data = [{'date': doc.id, **doc.to_dict()} for doc in moods_ref]
     return all_moods_data
 
 def calculate_streaks(habit_logs, habit_name):
-    """Calcula a sequência atual e a maior sequência para um hábito."""
+    # (Lógica mantida, pois já é eficiente)
     if not habit_logs: return 0, 0
-    
     dates_completed = {datetime.strptime(date, "%Y-%m-%d").date() for date, data in habit_logs.items() if data.get(habit_name)}
     if not dates_completed: return 0, 0
-
     sorted_dates = sorted(list(dates_completed))
-    
-    # Cálculo da Maior Sequência
     longest_streak = 0
     if sorted_dates:
         current_longest_streak = 1
@@ -82,62 +187,53 @@ def calculate_streaks(habit_logs, habit_name):
             else:
                 current_longest_streak = 1
             longest_streak = max(longest_streak, current_longest_streak)
-
-    # Cálculo da Sequência Atual
     current_streak = 0
     today = datetime.now().date()
     yesterday = today - timedelta(days=1)
-    
-    # Define a data de início da checagem (hoje ou ontem)
     check_date = today
     if today not in dates_completed:
         if yesterday in dates_completed:
             check_date = yesterday
         else:
             return 0, longest_streak
-
-    # Itera para trás para contar a sequência atual
     while check_date in dates_completed:
         current_streak += 1
         check_date -= timedelta(days=1)
-
     return current_streak, longest_streak
-
 
 # --- COMPONENTES DE UI (ABAS DA APLICAÇÃO) ---
 
 def render_habits_and_tasks(db, username):
-    st.header("📅 Hábitos e Tarefas")
-    st.write("Crie rotinas poderosas e organize seu dia com o Kanban.")
+    st.header("🎯 Hábitos e Tarefas")
+    st.write("Construa sua disciplina e organize suas metas com ferramentas visuais.")
     st.divider()
 
-    # --- SEÇÃO DE HÁBITOS ---
     st.subheader("💪 Monitoramento de Hábitos")
     
     habits_ref = db.collection('users').document(username).collection('habits_config')
     habits_list = [doc.id for doc in habits_ref.stream()]
 
-    with st.expander("Gerenciar Meus Hábitos"):
+    with st.expander("⚙️ Gerenciar Meus Hábitos"):
         with st.form("new_habit_form", clear_on_submit=True):
             new_habit = st.text_input("Adicionar novo hábito:")
             if st.form_submit_button("Adicionar Hábito"):
                 if new_habit and new_habit not in habits_list:
                     habits_ref.document(new_habit).set({'created_at': firestore.SERVER_TIMESTAMP})
                     st.success(f"Hábito '{new_habit}' adicionado!")
-                    st.cache_data.clear() # Limpa o cache para recarregar os dados
+                    st.cache_data.clear()
                     st.rerun()
         
         if habits_list:
             habit_to_delete = st.selectbox("Remover um hábito:", [""] + habits_list)
-            if st.button("Remover Hábito Selecionado", type="primary"):
+            if st.button("Remover Hábito", type="primary"):
                 if habit_to_delete:
                     habits_ref.document(habit_to_delete).delete()
                     st.warning(f"Hábito '{habit_to_delete}' removido.")
-                    st.cache_data.clear() # Limpa o cache
+                    st.cache_data.clear()
                     st.rerun()
 
     if not habits_list:
-        st.info("Você ainda não adicionou hábitos. Adicione um acima para começar.")
+        st.info("Adicione seu primeiro hábito em 'Gerenciar Meus Hábitos' para começar.")
         return
 
     st.markdown("##### **Registro de Hoje**")
@@ -145,7 +241,7 @@ def render_habits_and_tasks(db, username):
     today_log_ref = db.collection('users').document(username).collection('habits_log').document(today_str)
     today_log_data = today_log_ref.get().to_dict() or {}
 
-    cols = st.columns(len(habits_list))
+    cols = st.columns(len(habits_list) if habits_list else 1)
     for i, habit in enumerate(habits_list):
         with cols[i]:
             is_done = st.checkbox(habit, value=today_log_data.get(habit, False), key=f"habit_{habit}")
@@ -155,63 +251,47 @@ def render_habits_and_tasks(db, username):
                 st.rerun()
 
     st.markdown("##### **Análise e Histórico**")
-    selected_habit = st.selectbox("Selecione um hábito para ver os detalhes:", habits_list)
+    selected_habit = st.selectbox("Selecione um hábito para analisar:", habits_list)
 
     if selected_habit:
         all_logs = get_all_logs(db, username)
         current_streak, longest_streak = calculate_streaks(all_logs, selected_habit)
+        completed_dates = [date for date, data in all_logs.items() if data.get(selected_habit)]
         
-        c1, c2 = st.columns(2)
+        total_days_tracked = 0
+        if completed_dates:
+             first_day = min([datetime.strptime(d, "%Y-%m-%d") for d in completed_dates])
+             total_days_tracked = (datetime.now() - first_day).days + 1
+        
+        completion_rate = (len(completed_dates) / total_days_tracked) * 100 if total_days_tracked > 0 else 0
+
+        c1, c2, c3 = st.columns(3)
         c1.metric("🔥 Sequência Atual", f"{current_streak} dias")
         c2.metric("🏆 Maior Sequência", f"{longest_streak} dias")
+        c3.metric("📈 Taxa de Conclusão", f"{completion_rate:.1f}%")
 
-        # NOVO: Calendário Heatmap para visualização profissional do histórico
-        completed_dates = [date for date, data in all_logs.items() if data.get(selected_habit)]
         if completed_dates:
-            df = pd.DataFrame({'date': pd.to_datetime(completed_dates)})
-            df['count'] = 1
-            df = df.set_index('date')
+            df = pd.DataFrame({'date': pd.to_datetime(completed_dates), 'completed': 1}).set_index('date')
+            all_days = pd.date_range(start=df.index.min() - timedelta(days=1), end=datetime.now(), freq='D')
+            calendar_data = df.reindex(all_days, fill_value=0)
             
-            start_date = datetime.now() - timedelta(days=365)
-            all_days = pd.date_range(start=start_date, end=datetime.now(), freq='D')
-            
-            # Mapeia os dias para o formato do calendário
-            calendar_data = pd.DataFrame(index=all_days)
-            calendar_data['completed'] = df['count'].reindex(calendar_data.index).fillna(0)
-            calendar_data['day_of_week'] = calendar_data.index.dayofweek
-            calendar_data['week_of_year'] = calendar_data.index.isocalendar().week
-            
-            # Pivota os dados para o heatmap
-            heatmap_data = calendar_data.pivot_table(index='day_of_week', columns='week_of_year', values='completed')
-            
-            fig = go.Figure(data=go.Heatmap(
-                z=heatmap_data.values,
-                x=heatmap_data.columns,
-                y=['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'],
-                colorscale='Greens',
-                showscale=False,
-                hoverinfo='none'
-            ))
-            fig.update_layout(
-                title='Histórico de Conclusão (Último Ano)',
-                height=250,
-                margin=dict(t=50, b=0, l=0, r=0),
-                xaxis_showticklabels=False
-            )
+            fig = px.imshow([calendar_data['completed'].values],
+                            labels=dict(x="Dia", y="Hábito", color="Completado"),
+                            color_continuous_scale='Greens',
+                            title=f'Linha do Tempo de "{selected_habit}"')
+            fig.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
+
 
     st.divider()
 
-    # --- SEÇÃO DE TAREFAS (KANBAN) ---
-    st.subheader("📝 Lista de Tarefas (Kanban)")
+    st.subheader("📝 Quadro Kanban de Tarefas")
     tasks_ref = db.collection('users').document(username).collection('tasks')
-    
     tags = ["📌 A Fazer", "⚙️ Em Progresso", "✅ Concluído"]
     
     with st.form("new_task_form", clear_on_submit=True):
-        st.write("**Adicionar Nova Tarefa**")
         c1, c2 = st.columns([3,1])
-        new_task_text = c1.text_input("Tarefa:", label_visibility="collapsed", placeholder="Descreva a tarefa...")
+        new_task_text = c1.text_input("Nova Tarefa:", label_visibility="collapsed", placeholder="Ex: Estudar Machine Learning por 1 hora...")
         new_task_tag = c2.selectbox("Status:", tags, label_visibility="collapsed")
         if st.form_submit_button("＋ Adicionar Tarefa"):
             if new_task_text:
@@ -219,120 +299,102 @@ def render_habits_and_tasks(db, username):
                 st.rerun()
             
     cols = st.columns(len(tags))
-    tasks_by_tag = {tag: [] for tag in tags}
-    for task in tasks_ref.order_by("created_at").stream():
-        task_data = task.to_dict()
-        task_data['id'] = task.id
-        if task_data.get('tag') in tasks_by_tag:
-            tasks_by_tag[task_data['tag']].append(task_data)
+    tasks_by_tag = {tag: [task for task in tasks_ref.where('tag', '==', tag).order_by("created_at").stream()] for tag in tags}
             
     for i, tag in enumerate(tags):
         with cols[i]:
             st.markdown(f"##### {tag}")
             for task in tasks_by_tag[tag]:
-                # Usando container com borda nativa do Streamlit
+                task_data = task.to_dict()
                 with st.container(border=True):
-                    task_id = task['id']
-                    c1, c2 = st.columns([4, 1])
-                    c1.write(task['task'])
-                    # Popover para ações, deixando a UI mais limpa
-                    with c2.popover("•••"):
-                        new_tag = st.selectbox("Mover para:", tags, index=tags.index(tag), key=f"tag_{task_id}", label_visibility="collapsed")
-                        if st.button("🗑️ Remover", key=f"del_{task_id}", use_container_width=True, type="primary"):
-                            tasks_ref.document(task_id).delete()
+                    c1, c2 = st.columns([0.85, 0.15])
+                    c1.write(task_data['task'])
+                    with c2.popover("⋮"):
+                        new_tag = st.selectbox("Mover:", tags, index=i, key=f"tag_{task.id}", label_visibility="collapsed")
+                        if st.button("Remover", key=f"del_{task.id}", use_container_width=True, type="primary"):
+                            tasks_ref.document(task.id).delete()
                             st.rerun()
-                    
                     if new_tag != tag:
-                        tasks_ref.document(task_id).update({'tag': new_tag})
+                        tasks_ref.document(task.id).update({'tag': new_tag})
                         st.rerun()
 
 def render_mood(db, username):
-    st.header("😊 Monitoramento de Humor")
-    st.write("Registre seu humor diário e anote seus pensamentos para autoconhecimento.")
+    st.header("😊 Análise de Humor")
+    st.write("Entenda seus padrões emocionais e reflita sobre seu dia.")
     st.divider()
-
+    
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("Registro de Hoje")
+        st.subheader("✍️ Registro de Hoje")
         today_str = datetime.now().strftime("%Y-%m-%d")
         mood_log_ref = db.collection('users').document(username).collection('mood_log').document(today_str)
         mood_log_data = mood_log_ref.get().to_dict() or {}
-
         mood_map = {"Excelente": "😄", "Bem": "🙂", "Normal": "😐", "Mal": "😕", "Terrível": "😢"}
         mood_options = list(mood_map.keys())
         current_mood = mood_log_data.get('mood', '')
-        
-        selected_mood = st.radio(
-            "Como você se sente?", 
-            options=mood_options, 
-            index=mood_options.index(current_mood) if current_mood in mood_options else 0,
-            format_func=lambda x: f"{mood_map.get(x, '')} {x}"
-        )
-        
-        journal_entry = st.text_area("Diário de Hoje:", value=mood_log_data.get('journal', ''), height=200, placeholder="O que está em sua mente?")
-
+        selected_mood = st.radio("Como você se sente?", options=mood_options, index=mood_options.index(current_mood) if current_mood else 0, format_func=lambda x: f"{mood_map.get(x, '')} {x}")
+        journal_entry = st.text_area("Diário:", value=mood_log_data.get('journal', ''), height=200, placeholder="O que está em sua mente?")
         if st.button("Salvar Registro", type="primary", use_container_width=True):
             mood_log_ref.set({'mood': selected_mood, 'journal': journal_entry, 'timestamp': firestore.SERVER_TIMESTAMP}, merge=True)
-            st.success("Registro salvo com sucesso!")
-            st.cache_data.clear() # Limpa o cache para recarregar os gráficos
+            st.success("Registro salvo!")
+            st.cache_data.clear()
             st.rerun()
 
     all_moods_data = get_mood_logs(db, username)
     with col2:
-        st.subheader("Análise de Humor")
+        st.subheader("📊 Gráficos e Insights")
         if all_moods_data:
             df = pd.DataFrame(all_moods_data)
             df['date'] = pd.to_datetime(df['date'])
             
-            # Gráfico de Pizza para distribuição de humor
-            mood_counts = df['mood'].value_counts()
-            fig_pie = px.pie(mood_counts, values=mood_counts.values, names=mood_counts.index, title="Distribuição de Humor", hole=.4)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
-            # Gráfico de Linha para tendência de humor
-            df['mood_score'] = df['mood'].map({"Excelente": 5, "Bem": 4, "Normal": 3, "Mal": 2, "Terrível": 1})
-            df_trend = df.sort_values('date').set_index('date')['mood_score'].rolling(window=7, min_periods=1).mean()
-            fig_trend = px.line(df_trend, title='Tendência de Humor (Média Móvel de 7 Dias)')
-            fig_trend.update_layout(yaxis_title="Pontuação de Humor", xaxis_title="Data")
-            st.plotly_chart(fig_trend, use_container_width=True)
+            # NOVO: Filtro interativo para os gráficos
+            date_filter = st.selectbox("Analisar período:", ["Últimos 30 dias", "Últimos 90 dias", "Todo o período"])
+            today = pd.to_datetime(datetime.now().date())
+            if date_filter == "Últimos 30 dias":
+                df = df[df['date'] > (today - pd.Timedelta(days=30))]
+            elif date_filter == "Últimos 90 dias":
+                df = df[df['date'] > (today - pd.Timedelta(days=90))]
 
+            if not df.empty:
+                c1, c2 = st.columns(2)
+                most_frequent_mood = df['mood'].mode()[0]
+                c1.metric("Humor Frequente", f"{mood_map.get(most_frequent_mood, '❓')} {most_frequent_mood}")
+                
+                mood_counts = df['mood'].value_counts()
+                fig_pie = px.pie(mood_counts, values=mood_counts.values, names=mood_counts.index, title="Distribuição de Humor", hole=.4)
+                fig_pie.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                 st.info("Nenhum registro no período selecionado.")
         else:
-            st.info("Nenhum registro de humor encontrado para exibir análises.")
+            st.info("Faça seu primeiro registro de humor para ver as análises.")
 
     st.divider()
     st.subheader("🗓️ Histórico do Diário")
     if all_moods_data:
         for data in all_moods_data:
-            mood_icon = mood_map.get(data.get('mood'), '❓')
-            with st.expander(f"**{data['date']}** - Humor: {mood_icon} **{data.get('mood', 'N/A')}**"):
+            with st.expander(f"**{data['date']}** - Humor: {mood_map.get(data.get('mood'), '❓')} **{data.get('mood', 'N/A')}**"):
                 st.write(f"*{data.get('journal', 'Nenhum diário escrito.')}*")
     else:
         st.write("Seu histórico de diário aparecerá aqui.")
 
 def render_future_upgrades(db):
     st.header("🚀 Futuros Upgrades")
-    st.info("Sua opinião é importante para o futuro do app! Deixe sua sugestão abaixo.")
-    
+    st.info("Sua opinião é fundamental! Ajude a moldar o futuro do app.")
     with st.form("suggestion_form", clear_on_submit=True):
-        suggestion = st.text_area("Sua ideia:", placeholder="Eu adoraria ver uma funcionalidade de...")
+        suggestion = st.text_area("Sua ideia:", placeholder="Gostaria de uma funcionalidade para...")
         if st.form_submit_button("Enviar Sugestão", use_container_width=True):
             if suggestion:
-                # Salva a sugestão em uma coleção separada para análise
-                db.collection('suggestions').add({
-                    'suggestion': suggestion, 
-                    'user': st.session_state.username,
-                    'timestamp': firestore.SERVER_TIMESTAMP
-                })
-                st.success("Obrigado pela sua sugestão! Ela foi enviada.")
+                db.collection('suggestions').add({'suggestion': suggestion, 'user': st.session_state.username,'timestamp': firestore.SERVER_TIMESTAMP})
+                st.success("Obrigado pela sua sugestão!")
                 st.balloons()
 
-# --- TELAS PRINCIPAIS (LOGIN E APP) ---
+# --- TELAS PRINCIPAIS ---
 
 def main_app(db, username):
-    """Renderiza a aplicação principal após o login."""
-    st.sidebar.title(f"Olá, {username}! 👋")
+    st.sidebar.title(f"Olá, {username}! ✨")
     st.sidebar.markdown("---")
     if st.sidebar.button("Sair da Conta", use_container_width=True, type="primary"):
         st.session_state.logged_in = False
@@ -341,48 +403,47 @@ def main_app(db, username):
         st.rerun()
     
     st.title("📓 Meu Diário Pessoal")
-    st.caption("Sua ferramenta completa para autoconhecimento e produtividade.")
+    st.caption(f"Bem-vindo ao seu centro de produtividade e autoconhecimento.  |  Data: {datetime.now().strftime('%d/%m/%Y')}")
     
-    tab1, tab2, tab3 = st.tabs(["**Hábitos e Tarefas**", "**Meu Humor**", "**Futuros Upgrades**"])
+    tab1, tab2, tab3 = st.tabs(["**🎯 Hábitos e Tarefas**", "**😊 Análise de Humor**", "**🚀 Futuros Upgrades**"])
 
     with tab1: render_habits_and_tasks(db, username)
     with tab2: render_mood(db, username)
     with tab3: render_future_upgrades(db)
 
 def login_screen(db):
-    """Renderiza a tela de login e cadastro."""
-    st.title("📓 Bem-vindo ao seu Diário Pessoal")
-    st.write("Acesse sua conta ou crie uma nova para começar sua jornada.")
+    st.title("✨ Bem-vindo ao seu Diário Pessoal")
+    st.write("Acesse ou crie sua conta para começar a transformar sua rotina.")
     
-    choice = st.radio("Escolha uma opção:", ["Login", "Cadastrar"], horizontal=True, label_visibility="collapsed")
-    
-    with st.form("login_form"):
-        username = st.text_input("Usuário", placeholder="Seu nome de usuário")
-        password = st.text_input("Senha", type='password', placeholder="Sua senha")
-        
-        button_label = "Entrar" if choice == "Login" else "Criar Conta"
-        if st.form_submit_button(button_label, type="primary", use_container_width=True):
-            if not username or not password:
-                st.error("Por favor, preencha todos os campos.")
-                return
-
-            if choice == "Login":
-                user_doc = db.collection('users').document(username).get()
-                if user_doc.exists and check_password(password, user_doc.to_dict().get('password')):
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha inválidos.")
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        choice = st.radio("Escolha:", ["Login", "Cadastrar"], horizontal=True, label_visibility="collapsed")
+        with st.form("login_form"):
+            username = st.text_input("Usuário", placeholder="Seu nome de usuário")
+            password = st.text_input("Senha", type='password', placeholder="Sua senha")
             
-            elif choice == "Cadastrar":
-                if db.collection('users').document(username).get().exists:
-                    st.error("Este nome de usuário já existe.")
-                else:
-                    hashed_pass = hash_password(password)
-                    db.collection('users').document(username).set({'password': hashed_pass, 'created_at': firestore.SERVER_TIMESTAMP})
-                    st.success("Conta criada com sucesso! Agora você pode fazer o login.")
-                    st.balloons()
+            button_label = "Entrar" if choice == "Login" else "Criar Conta"
+            if st.form_submit_button(button_label, type="primary", use_container_width=True):
+                if not username or not password:
+                    st.error("Por favor, preencha todos os campos.")
+                elif choice == "Login":
+                    user_doc = db.collection('users').document(username).get()
+                    if user_doc.exists and check_password(password, user_doc.to_dict().get('password')):
+                        st.session_state.logged_in = True
+                        st.session_state.username = username
+                        st.rerun()
+                    else:
+                        st.error("Usuário ou senha inválidos.")
+                elif choice == "Cadastrar":
+                    if db.collection('users').document(username).get().exists:
+                        st.error("Este nome de usuário já existe.")
+                    else:
+                        db.collection('users').document(username).set({'password': hash_password(password), 'created_at': firestore.SERVER_TIMESTAMP})
+                        st.success("Conta criada! Agora você pode fazer o login.")
+                        st.balloons()
+    with col2:
+        st.write("") # Espaçamento
+        st.image("https://storage.googleapis.com/gemini-prod/images/496739a8-7966-4d0f-8c08-164134887569.png", use_column_width=True)
 
 # --- EXECUÇÃO PRINCIPAL DO APP ---
 if __name__ == "__main__":
