@@ -4,219 +4,315 @@ from firebase_admin import credentials, firestore
 import json
 from google.oauth2 import service_account
 import bcrypt
-from datetime import datetime
-import os # Importa a biblioteca 'os'
+from datetime import datetime, timedelta
+import os
 
-# Configuração da página
+# --- Configuração da Página ---
 st.set_page_config(layout="wide", page_title="Meu Diário Pessoal")
 
-# Função para inicializar o Firebase
+# --- Conexão com Firebase ---
 def init_firebase():
-    """Inicializa a conexão com o Firebase usando credenciais do Streamlit Secrets ou de um arquivo local."""
+    """Inicializa a conexão com o Firebase de forma segura."""
     if firebase_admin._apps:
         return firestore.client()
-    
     try:
-        # Tenta carregar as credenciais do Streamlit Secrets (para deploy)
         key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
-        
-        # VERIFICAÇÃO EXPLÍCITA DO PROJECT_ID
         project_id = key_dict.get('project_id')
         if not project_id:
-            st.error("ERRO CRÍTICO: 'project_id' não foi encontrado dentro das suas credenciais do Firebase.")
-            st.info("Por favor, verifique o conteúdo do seu arquivo JSON/secret. Ele deve conter uma linha como: \"project_id\": \"seu-projeto-id\", ...")
+            st.error("ERRO CRÍTICO: 'project_id' não encontrado nas credenciais.")
             st.stop()
-            
         os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
         creds = service_account.Credentials.from_service_account_info(key_dict)
         firebase_admin.initialize_app(creds)
-
     except (KeyError, json.JSONDecodeError):
-        # Se falhar, tenta carregar do arquivo local (para rodar no seu PC)
-        try:
-            with open('firebase_key.json') as f:
-                key_dict = json.load(f)
-
-            # VERIFICAÇÃO EXPLÍCITA DO PROJECT_ID
-            project_id = key_dict.get('project_id')
-            if not project_id:
-                st.error("ERRO CRÍTICO: 'project_id' não foi encontrado no seu arquivo 'firebase_key.json'.")
-                st.info("Por favor, verifique o conteúdo do seu arquivo. Ele deve conter uma linha como: \"project_id\": \"seu-projeto-id\", ...")
-                st.stop()
-
-            os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-            creds = service_account.Credentials.from_service_account_info(key_dict)
-            firebase_admin.initialize_app(creds)
-
-        except FileNotFoundError:
-            # Se nenhum dos dois funcionar, mostra o erro e para o app
-            st.error("Erro fatal: Não foi possível encontrar as credenciais do Firebase.")
-            st.info("Para rodar localmente, coloque seu arquivo 'firebase_key.json' na mesma pasta do app.py.")
-            st.info("Para deploy, adicione as credenciais no segredo [FIREBASE_SERVICE_ACCOUNT_KEY] do Streamlit Cloud.")
-            st.stop()
-    
+        st.error("Erro fatal: Credenciais do Firebase não encontradas ou inválidas nos Segredos do Streamlit.")
+        st.stop()
     return firestore.client()
-
 
 # --- Funções de Autenticação ---
 def hash_password(password):
-    """Criptografa a senha."""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
 def check_password(password, hashed):
-    """Verifica se a senha corresponde à versão criptografada."""
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
-# --- Funções do Banco de Dados ---
-def get_user_data(db, username):
-    """Busca os dados do usuário no Firestore."""
-    user_ref = db.collection('users').document(username)
-    return user_ref.get()
+# --- Funções de Lógica de Hábitos ---
+def calculate_streaks(habit_logs, habit_name):
+    """Calcula a sequência atual e a maior sequência para um hábito."""
+    if not habit_logs:
+        return 0, 0
 
-def create_user(db, username, hashed_password):
-    """Cria um novo usuário no Firestore."""
-    db.collection('users').document(username).set({
-        'password': hashed_password
-    })
-
-def get_or_create_daily_doc(db, username):
-    """Pega ou cria o documento do dia para o usuário."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    doc_ref = db.collection('users').document(username).collection('daily_data').document(today)
-    doc = doc_ref.get()
-    if not doc.exists:
-        doc_ref.set({
-            'mood': '',
-            'habits': {},
-            'todos': []
-        })
-        return doc_ref.get()
-    return doc
-
-# --- Interface do Streamlit ---
-
-# Inicializa o estado da sessão
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-
-# Tenta inicializar o Firebase
-db = init_firebase()
-
-# Tela de Login / Cadastro
-def login_screen(db):
-    st.header("Login / Cadastro")
+    sorted_dates = sorted(habit_logs.keys(), reverse=True)
     
-    choice = st.selectbox("Escolha uma opção:", ["Login", "Cadastrar"])
-    
-    username = st.text_input("Usuário")
-    password = st.text_input("Senha", type='password')
-    
-    if choice == "Login":
-        if st.button("Entrar"):
-            if not username or not password:
-                st.warning("Por favor, preencha todos os campos.")
-                return
+    # Cálculo da Maior Sequência
+    longest_streak = 0
+    current_longest_streak = 0
+    last_date = None
 
-            user_doc = get_user_data(db, username)
-            if user_doc.exists:
-                user_data = user_doc.to_dict()
-                if check_password(password, user_data.get('password')):
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.rerun()
-                else:
-                    st.error("Senha incorreta.")
+    all_sorted_dates = sorted(habit_logs.keys())
+    for date_str in all_sorted_dates:
+        if habit_logs[date_str].get(habit_name):
+            current_date = datetime.strptime(date_str, "%Y-%m-%d")
+            if last_date and (current_date - last_date).days == 1:
+                current_longest_streak += 1
             else:
-                st.error("Usuário não encontrado.")
+                current_longest_streak = 1
+            last_date = current_date
+            if current_longest_streak > longest_streak:
+                longest_streak = current_longest_streak
+        else:
+            current_longest_streak = 0
+            last_date = None
 
-    elif choice == "Cadastrar":
-        if st.button("Criar Conta"):
-            if not username or not password:
-                st.warning("Por favor, preencha todos os campos.")
-                return
+    # Cálculo da Sequência Atual
+    current_streak = 0
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
 
-            user_doc = get_user_data(db, username)
-            if user_doc.exists:
-                st.error("Este nome de usuário já existe.")
+    # Verifica hoje
+    if habit_logs.get(today.strftime("%Y-%m-%d"), {}).get(habit_name):
+        current_streak = 1
+        check_date = yesterday
+        while True:
+            if habit_logs.get(check_date.strftime("%Y-%m-%d"), {}).get(habit_name):
+                current_streak += 1
+                check_date -= timedelta(days=1)
             else:
-                hashed = hash_password(password)
-                create_user(db, username, hashed)
-                st.success("Conta criada com sucesso! Agora você pode fazer o login.")
+                break
+    # Verifica ontem se hoje não foi feito
+    elif habit_logs.get(yesterday.strftime("%Y-%m-%d"), {}).get(habit_name):
+        current_streak = 1
+        check_date = yesterday - timedelta(days=1)
+        while True:
+            if habit_logs.get(check_date.strftime("%Y-%m-%d"), {}).get(habit_name):
+                current_streak += 1
+                check_date -= timedelta(days=1)
+            else:
+                break
 
+    return current_streak, longest_streak
 
-# Tela Principal do App
-def main_app(db):
-    st.title(f"Diário de Bordo de {st.session_state.username}")
+# --- Funções de Interface das Abas ---
 
-    if st.button("Sair"):
-        st.session_state.logged_in = False
-        st.session_state.username = ""
-        st.rerun()
+def render_habits_and_tasks(db, username):
+    st.header("Hábitos e Tarefas")
+
+    # --- HÁBITOS ---
+    st.subheader("💪 Monitoramento de Hábitos")
     
-    # Pega os dados do dia
-    daily_doc_snapshot = get_or_create_daily_doc(db, st.session_state.username)
-    daily_data = daily_doc_snapshot.to_dict()
-    doc_ref = daily_doc_snapshot.reference
-    
-    # --- Seção de Humor ---
-    st.header("🙂 Como você está se sentindo hoje?")
-    moods = ["", "Excelente", "Bem", "Normal", "Mal", "Terrível"]
-    current_mood_index = moods.index(daily_data.get('mood', '')) if daily_data.get('mood') in moods else 0
-    
-    mood = st.selectbox("Seu humor:", moods, index=current_mood_index)
-    if mood != daily_data.get('mood'):
-        doc_ref.update({'mood': mood})
-        st.success("Humor atualizado!")
-        st.rerun()
+    # Gerenciamento de Hábitos
+    habits_ref = db.collection('users').document(username).collection('habits_config')
+    habits_docs = habits_ref.stream()
+    habits_list = [doc.id for doc in habits_docs]
+
+    with st.expander("Gerenciar Meus Hábitos"):
+        new_habit = st.text_input("Adicionar um novo hábito:")
+        if st.button("Adicionar Hábito"):
+            if new_habit and new_habit not in habits_list:
+                habits_ref.document(new_habit).set({'created_at': datetime.now()})
+                st.success(f"Hábito '{new_habit}' adicionado!")
+                st.rerun()
         
-    # --- Seção de Hábitos ---
-    st.header("💪 Hábitos Diários")
-    
-    habits_list = ["Ler", "Meditar", "Exercício", "Beber 2L de água"] 
-    habits_data = daily_data.get('habits', {})
+        if habits_list:
+            habit_to_delete = st.selectbox("Remover um hábito:", [""] + habits_list)
+            if st.button("Remover Hábito Selecionado", type="primary"):
+                if habit_to_delete:
+                    habits_ref.document(habit_to_delete).delete()
+                    # Opcional: remover dos logs também (pode ser lento)
+                    st.warning(f"Hábito '{habit_to_delete}' removido.")
+                    st.rerun()
+
+    if not habits_list:
+        st.info("Você ainda não adicionou nenhum hábito. Adicione um acima para começar.")
+        return
+
+    # Log de Hábitos do Dia
+    st.markdown("#### Registro de Hoje")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_log_ref = db.collection('users').document(username).collection('habits_log').document(today_str)
+    today_log_doc = today_log_ref.get()
+    today_log_data = today_log_doc.to_dict() if today_log_doc.exists else {}
 
     cols = st.columns(len(habits_list))
     for i, habit in enumerate(habits_list):
         with cols[i]:
-            is_done = st.checkbox(habit, value=habits_data.get(habit, False), key=f"habit_{habit}")
-            if is_done != habits_data.get(habit, False):
-                habits_data[habit] = is_done
-                doc_ref.update({'habits': habits_data})
+            is_done = st.checkbox(habit, value=today_log_data.get(habit, False), key=f"habit_{habit}")
+            if is_done != today_log_data.get(habit, False):
+                today_log_ref.set({habit: is_done}, merge=True)
                 st.rerun()
 
-    # --- Seção de To-Do ---
-    st.header("📝 Tarefas do Dia (To-Do)")
-    todos = daily_data.get('todos', [])
+    # Estatísticas e Histórico dos Hábitos
+    st.markdown("#### Análise e Histórico")
+    selected_habit = st.selectbox("Selecione um hábito para ver os detalhes:", habits_list)
+
+    if selected_habit:
+        all_logs_ref = db.collection('users').document(username).collection('habits_log').stream()
+        all_logs = {doc.id: doc.to_dict() for doc in all_logs_ref}
+        
+        current_streak, longest_streak = calculate_streaks(all_logs, selected_habit)
+        
+        c1, c2 = st.columns(2)
+        c1.metric("🔥 Sequência Atual", f"{current_streak} dias")
+        c2.metric("🏆 Maior Sequência", f"{longest_streak} dias")
+
+        with st.expander("Ver histórico de conclusão"):
+            completed_dates = []
+            for date, data in sorted(all_logs.items(), reverse=True):
+                if data.get(selected_habit):
+                    completed_dates.append(date)
+            st.table(completed_dates)
+
+    st.divider()
+
+    # --- TAREFAS (TO-DO) ---
+    st.subheader("📝 Lista de Tarefas (Kanban)")
+    tasks_ref = db.collection('users').document(username).collection('tasks')
     
-    c1, c2 = st.columns([3,1])
-    with c1:
-        new_todo = st.text_input("Nova tarefa:", key="new_todo_input")
-    with c2:
-        st.write("") # Espaçamento
-        st.write("") # Espaçamento
-        if st.button("Adicionar Tarefa"):
-            if new_todo:
-                todos.append({"task": new_todo, "done": False})
-                doc_ref.update({'todos': todos})
-                st.rerun()
-
-    for i, todo in enumerate(todos):
-        col1, col2 = st.columns([0.1, 0.9])
-        with col1:
-            done = st.checkbox("", value=todo['done'], key=f"todo_{i}")
-        with col2:
-            task_text = f"~~{todo['task']}~~" if todo['done'] else todo['task']
-            st.write(task_text)
-            
-        if done != todo['done']:
-            todos[i]['done'] = done
-            doc_ref.update({'todos': todos})
+    tags = ["A Fazer", "Em Progresso", "Concluído"]
+    
+    # Adicionar nova tarefa
+    with st.form("new_task_form", clear_on_submit=True):
+        c1, c2 = st.columns([3,1])
+        new_task_text = c1.text_input("Nova Tarefa:")
+        new_task_tag = c2.selectbox("Grupo:", tags)
+        submitted = st.form_submit_button("Adicionar Tarefa")
+        if submitted and new_task_text:
+            tasks_ref.add({
+                'task': new_task_text,
+                'tag': new_task_tag,
+                'created_at': datetime.now()
+            })
             st.rerun()
             
-# --- Lógica Principal ---
-if not st.session_state.logged_in:
-    login_screen(db)
+    # Visualização Kanban
+    cols = st.columns(len(tags))
+    all_tasks = tasks_ref.stream()
+    tasks_by_tag = {tag: [] for tag in tags}
+    for task in all_tasks:
+        task_data = task.to_dict()
+        task_data['id'] = task.id
+        if task_data['tag'] in tasks_by_tag:
+            tasks_by_tag[task_data['tag']].append(task_data)
+            
+    for i, tag in enumerate(tags):
+        with cols[i]:
+            st.markdown(f"**{tag}**")
+            for task in tasks_by_tag[tag]:
+                task_id = task['id']
+                task_text = task['task']
+                with st.container(border=True):
+                    st.write(task_text)
+                    new_tag = st.selectbox("Mover para:", tags, index=tags.index(tag), key=f"tag_{task_id}", label_visibility="collapsed")
+                    if new_tag != tag:
+                        tasks_ref.document(task_id).update({'tag': new_tag})
+                        st.rerun()
+
+
+def render_mood(db, username):
+    st.header("🙂 Monitoramento de Humor")
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    mood_log_ref = db.collection('users').document(username).collection('mood_log').document(today_str)
+    mood_log_doc = mood_log_ref.get()
+    mood_log_data = mood_log_doc.to_dict() if mood_log_doc.exists else {}
+
+    # Registro do Dia
+    st.subheader("Como você está se sentindo hoje?")
+    moods = ["", "Excelente", "Bem", "Normal", "Mal", "Terrível"]
+    current_mood = mood_log_data.get('mood', '')
+    current_mood_index = moods.index(current_mood) if current_mood in moods else 0
+    
+    selected_mood = st.selectbox("Seu humor:", moods, index=current_mood_index)
+    
+    journal_entry = st.text_area("Diário de hoje:", value=mood_log_data.get('journal', ''), height=200)
+
+    if st.button("Salvar Registro de Hoje"):
+        mood_log_ref.set({
+            'mood': selected_mood,
+            'journal': journal_entry,
+            'timestamp': datetime.now()
+        }, merge=True)
+        st.success("Registro salvo com sucesso!")
+        st.rerun()
+
+    st.divider()
+
+    # Histórico de Humor
+    st.subheader("🗓️ Histórico de Humor e Diário")
+    all_moods_ref = db.collection('users').document(username).collection('mood_log').order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
+    
+    for mood_doc in all_moods_ref:
+        data = mood_doc.to_dict()
+        with st.expander(f"**{mood_doc.id}** - Humor: **{data.get('mood', 'N/A')}**"):
+            st.write(data.get('journal', '*Nenhum diário escrito.*'))
+
+def render_future_upgrades():
+    st.header("🚀 Futuros Upgrades")
+    st.info("Esta área é um espaço reservado para futuras funcionalidades incríveis!")
+    st.markdown("""
+    Algumas ideias para o futuro:
+    - Gráficos de análise de humor e hábitos.
+    - Metas de longo prazo.
+    - Monitoramento de finanças.
+    - Integração com calendários.
+    """)
+
+# --- Lógica Principal e Telas ---
+
+def main_app(db, username):
+    st.sidebar.title(f"Olá, {username}!")
+    if st.sidebar.button("Sair"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.rerun()
+    
+    st.title("Meu Diário Pessoal de Acompanhamento")
+    
+    tab1, tab2, tab3 = st.tabs(["Hábitos e Tarefas", "Meu Humor", "Futuros Upgrades"])
+
+    with tab1:
+        render_habits_and_tasks(db, username)
+    with tab2:
+        render_mood(db, username)
+    with tab3:
+        render_future_upgrades()
+
+def login_screen(db):
+    st.title("Bem-vindo ao seu Diário Pessoal")
+    choice = st.selectbox("Escolha uma opção:", ["Login", "Cadastrar"])
+    
+    with st.form("login_form"):
+        username = st.text_input("Usuário")
+        password = st.text_input("Senha", type='password')
+        submitted = st.form_submit_button(choice)
+
+        if submitted:
+            user_doc = db.collection('users').document(username).get()
+            if choice == "Login":
+                if user_doc.exists and check_password(password, user_doc.to_dict().get('password')):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha inválidos.")
+            elif choice == "Cadastrar":
+                if user_doc.exists:
+                    st.error("Este nome de usuário já existe.")
+                else:
+                    hashed_pass = hash_password(password)
+                    db.collection('users').document(username).set({'password': hashed_pass})
+                    st.success("Conta criada! Agora você pode fazer o login.")
+
+
+# --- Execução do App ---
+
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+
+db = init_firebase()
+
+if st.session_state.logged_in:
+    main_app(db, st.session_state.username)
 else:
-    main_app(db)
+    login_screen(db)
 
