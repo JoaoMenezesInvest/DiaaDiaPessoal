@@ -5,6 +5,7 @@ import json
 from google.oauth2 import service_account
 import bcrypt
 from datetime import datetime
+import os # Importa a biblioteca 'os'
 
 # Configuração da página
 st.set_page_config(layout="wide", page_title="Meu Diário Pessoal")
@@ -18,22 +19,25 @@ def init_firebase():
     try:
         # Tenta carregar as credenciais do Streamlit Secrets (para deploy)
         key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
+        
+        # SOLUÇÃO DEFINITIVA: Define a variável de ambiente GOOGLE_CLOUD_PROJECT
+        os.environ["GOOGLE_CLOUD_PROJECT"] = key_dict.get('project_id')
+
         creds = service_account.Credentials.from_service_account_info(key_dict)
-        # Passa o project_id explicitamente para evitar o erro
-        firebase_admin.initialize_app(creds, {
-            'projectId': key_dict.get('project_id'),
-        })
+        firebase_admin.initialize_app(creds)
+
     except (KeyError, json.JSONDecodeError):
         # Se falhar, tenta carregar do arquivo local (para rodar no seu PC)
         try:
-            # Carrega o arquivo JSON para um dicionário
             with open('firebase_key.json') as f:
                 key_dict = json.load(f)
+            
+            # SOLUÇÃO DEFINITIVA: Define a variável de ambiente GOOGLE_CLOUD_PROJECT
+            os.environ["GOOGLE_CLOUD_PROJECT"] = key_dict.get('project_id')
+            
             creds = service_account.Credentials.from_service_account_info(key_dict)
-             # Passa o project_id explicitamente para evitar o erro
-            firebase_admin.initialize_app(creds, {
-                'projectId': key_dict.get('project_id'),
-            })
+            firebase_admin.initialize_app(creds)
+
         except FileNotFoundError:
             # Se nenhum dos dois funcionar, mostra o erro e para o app
             st.error("Erro fatal: Não foi possível encontrar as credenciais do Firebase.")
