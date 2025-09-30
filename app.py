@@ -1,252 +1,234 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
+import json
+from google.oauth2 import service_account
 import bcrypt
 from datetime import datetime
-import json
 
-# --- CONFIGURAÇÃO E INICIALIZAÇÃO DO FIREBASE ---
+# --- CÓDIGO DE DIAGNÓSTICO ---
+# Este bloco irá nos mostrar o que o Streamlit está lendo nos Secrets.
+st.set_page_config(layout="wide")
+st.write("--- INÍCIO DO DIAGNÓSTICO DE SECRETS ---")
 
-# Carrega as credenciais do Firebase a partir dos segredos do Streamlit
-# Isso mantém sua chave de serviço segura e fora do código-fonte.
 try:
-    # Tenta carregar a chave a partir dos segredos do Streamlit (para produção)
-    firebase_secrets_str = st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"]
-    firebase_secrets = json.loads(firebase_secrets_str)
-    cred = credentials.Certificate(firebase_secrets)
-except (KeyError, json.JSONDecodeError):
-    # Se falhar (ambiente de desenvolvimento local), tenta carregar de um arquivo local
+    # Mostra todas as chaves de secrets que o Streamlit encontrou.
+    st.write("Secrets encontrados:", list(st.secrets.keys()))
+
+    if "FIREBASE_SERVICE_ACCOUNT_KEY" in st.secrets:
+        st.success("✅ Secret 'FIREBASE_SERVICE_ACCOUNT_KEY' foi encontrado!")
+        
+        # Tenta carregar o JSON para ver se o conteúdo é válido.
+        try:
+            key_content = st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"]
+            key_dict = json.loads(key_content)
+            st.success("✅ O conteúdo do secret é um JSON válido.")
+            st.write("Project ID encontrado no secret:", key_dict.get("project_id"))
+        except json.JSONDecodeError:
+            st.error("❌ ERRO: O conteúdo do secret foi encontrado, mas NÃO é um JSON válido. Verifique se copiou e colou corretamente.")
+        except Exception as e:
+            st.error(f"❌ ERRO ao processar o JSON: {e}")
+            
+    else:
+        st.error("❌ ERRO CRÍTICO: Secret 'FIREBASE_SERVICE_ACCOUNT_KEY' NÃO foi encontrado.")
+        st.warning("Verifique se o nome do secret nas configurações do Streamlit está IDÊNTICO (maiúsculas e minúsculas).")
+
+except Exception as e:
+    st.error(f"Ocorreu um erro ao tentar acessar os secrets: {e}")
+
+st.write("--- FIM DO DIAGNÓSTICO ---")
+# --- FIM DO CÓDIGO DE DIAGNÓSTICO ---
+
+
+# Função para inicializar o Firebase
+def init_firebase():
+    """Inicializa a conexão com o Firebase usando credenciais do Streamlit Secrets ou de um arquivo local."""
+    if firebase_admin._apps:
+        return firestore.client()
     try:
-        cred = credentials.Certificate("firebase_key.json")
-    except Exception as e:
-        st.error("Erro fatal: Não foi possível encontrar as credenciais do Firebase.")
-        st.info(
-            "Para rodar localmente, coloque seu arquivo 'firebase_key.json' na mesma pasta do app.py.")
-        st.info(
-            "Para deploy, adicione as credenciais no segredo [FIREBASE_SERVICE_ACCOUNT_KEY] do Streamlit Cloud.")
-        st.stop()
+        # Tenta carregar as credenciais do Streamlit Secrets (para deploy)
+        key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
+        creds = service_account.Credentials.from_service_account_info(key_dict)
+        firebase_admin.initialize_app(creds)
+        st.session_state.firebase_initialized = True
+    except (KeyError, json.JSONDecodeError):
+        # Se falhar, tenta carregar do arquivo local (para rodar no seu PC)
+        try:
+            if not firebase_admin._apps:
+                cred = credentials.Certificate("firebase_key.json")
+                firebase_admin.initialize_app(cred)
+                st.session_state.firebase_initialized = True
+        except FileNotFoundError:
+            # Se nenhum dos dois funcionar, mostra o erro e as instruções
+            if "firebase_initialized" not in st.session_state:
+                 # Mensagens de erro já são mostradas pelo bloco de diagnóstico
+                st.stop()
+    
+    return firestore.client()
 
 
-# Inicializa o app Firebase apenas uma vez
-try:
-    firebase_admin.get_app()
-except ValueError:
-    firebase_admin.initialize_app(cred)
-
-db = firestore.client()
-
-# --- FUNÇÕES DE AUTENTICAÇÃO E BANCO DE DADOS ---
-
-
+# --- Funções de Autenticação ---
 def hash_password(password):
-    """Criptografa a senha antes de salvar no banco."""
+    """Criptografa a senha."""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
-
 def check_password(password, hashed):
-    """Verifica se a senha fornecida corresponde à senha criptografada."""
+    """Verifica se a senha corresponde à versão criptografada."""
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
+# --- Funções do Banco de Dados ---
+def get_user_data(db, username):
+    """Busca os dados do usuário no Firestore."""
+    user_ref = db.collection('users').document(username)
+    return user_ref.get()
 
-def register_user(username, password):
-    """Registra um novo usuário no Firestore."""
-    users_ref = db.collection('users')
-    if users_ref.document(username).get().exists:
-        return False, "Nome de usuário já existe."
-
-    hashed_password = hash_password(password)
-    users_ref.document(username).set({
+def create_user(db, username, hashed_password):
+    """Cria um novo usuário no Firestore."""
+    db.collection('users').document(username).set({
         'password': hashed_password
     })
-    return True, "Usuário registrado com sucesso!"
 
+def get_or_create_daily_doc(db, username):
+    """Pega ou cria o documento do dia para o usuário."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    doc_ref = db.collection('users').document(username).collection('daily_data').document(today)
+    doc = doc_ref.get()
+    if not doc.exists:
+        doc_ref.set({
+            'mood': '',
+            'habits': {},
+            'todos': []
+        })
+        return doc_ref.get()
+    return doc
 
-def validate_login(username, password):
-    """Valida as credenciais do usuário."""
-    users_ref = db.collection('users')
-    user_doc = users_ref.document(username).get()
+# --- Interface do Streamlit ---
 
-    if not user_doc.exists:
-        return False
-
-    user_data = user_doc.to_dict()
-    hashed_password = user_data.get('password')
-
-    return check_password(password, hashed_password)
-
-
-def get_today_data_ref(username):
-    """Retorna a referência do documento para os dados de hoje do usuário."""
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    return db.collection('users').document(username).collection('data').document(today_str)
-
-
-def load_data(username):
-    """Carrega os dados de hoje para o usuário logado."""
-    data_ref = get_today_data_ref(username)
-    doc = data_ref.get()
-    if doc.exists:
-        return doc.to_dict()
-    # Retorna uma estrutura padrão se não houver dados para o dia
-    return {'mood': None, 'habits': {}, 'tasks': []}
-
-
-def save_data(username, data):
-    """Salva os dados de hoje para o usuário logado."""
-    data_ref = get_today_data_ref(username)
-    data_ref.set(data)
-
-# --- INICIALIZAÇÃO DO ESTADO DA SESSÃO ---
-
-
+# Inicializa o estado da sessão
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-if 'username' not in st.session_state:
     st.session_state.username = ""
-if 'data' not in st.session_state:
-    st.session_state.data = {}
 
-# --- LÓGICA DE LOGIN E REGISTRO NA BARRA LATERAL ---
+# Tenta inicializar o Firebase
+try:
+    db = init_firebase()
+except Exception:
+    db = None
 
-
-def login_form():
-    st.sidebar.title("Login")
-    username = st.sidebar.text_input("Usuário", key="login_user")
-    password = st.sidebar.text_input(
-        "Senha", type="password", key="login_pass")
-
-    if st.sidebar.button("Entrar"):
-        if validate_login(username, password):
-            st.session_state.logged_in = True
-            st.session_state.username = username
-            # Carrega os dados após o login
-            st.session_state.data = load_data(username)
-            st.rerun()
-        else:
-            st.sidebar.error("Usuário ou senha inválidos.")
-
-
-def register_form():
-    st.sidebar.title("Registro")
-    new_username = st.sidebar.text_input("Novo Usuário", key="reg_user")
-    new_password = st.sidebar.text_input(
-        "Nova Senha", type="password", key="reg_pass")
-
-    if st.sidebar.button("Registrar"):
-        if new_username and new_password:
-            success, message = register_user(new_username, new_password)
-            if success:
-                st.sidebar.success(message)
-            else:
-                st.sidebar.error(message)
-        else:
-            st.sidebar.warning("Por favor, preencha todos os campos.")
-
-
-# Exibe o formulário de login ou registro se não estiver logado
-if not st.session_state.logged_in:
-    choice = st.sidebar.radio("Escolha uma ação", ["Login", "Registro"])
+# Tela de Login / Cadastro
+def login_screen(db):
+    st.header("Login / Cadastro")
+    
+    choice = st.selectbox("Escolha uma opção:", ["Login", "Cadastrar"])
+    
+    username = st.text_input("Usuário")
+    password = st.text_input("Senha", type='password')
+    
     if choice == "Login":
-        login_form()
-    else:
-        register_form()
-    st.title("Bem-vindo ao seu Diário Pessoal!")
-    st.write("Faça login ou registre-se na barra lateral para continuar.")
-    st.stop()  # Interrompe a execução do restante do app
+        if st.button("Entrar"):
+            if not username or not password:
+                st.warning("Por favor, preencha todos os campos.")
+                return
 
-# --- APLICAÇÃO PRINCIPAL (SÓ APARECE APÓS O LOGIN) ---
+            user_doc = get_user_data(db, username)
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                if check_password(password, user_data.get('password')):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.rerun()
+                else:
+                    st.error("Senha incorreta.")
+            else:
+                st.error("Usuário não encontrado.")
 
-# Cabeçalho
-st.title(f"Diário de {st.session_state.username}")
-st.markdown(f"**Data:** {datetime.now().strftime('%d/%m/%Y')}")
+    elif choice == "Cadastrar":
+        if st.button("Criar Conta"):
+            if not username or not password:
+                st.warning("Por favor, preencha todos os campos.")
+                return
 
-# Botão de Logout
-if st.sidebar.button("Sair"):
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.session_state.data = {}
-    st.rerun()
+            user_doc = get_user_data(db, username)
+            if user_doc.exists:
+                st.error("Este nome de usuário já existe.")
+            else:
+                hashed = hash_password(password)
+                create_user(db, username, hashed)
+                st.success("Conta criada com sucesso! Agora você pode fazer o login.")
 
-# Carrega os dados na primeira vez ou após o login
-if not st.session_state.data:
-    st.session_state.data = load_data(st.session_state.username)
 
-# Seção de Humor
-st.header("😊 Como você está se sentindo hoje?")
-mood_options = ['🤩 Incrível', '😊 Bem', '😐 Normal', '😕 Mal', '😢 Péssimo']
-selected_mood = st.radio(
-    "Selecione seu humor:",
-    mood_options,
-    index=mood_options.index(st.session_state.data.get(
-        'mood')) if st.session_state.data.get('mood') in mood_options else 2,
-    horizontal=True
-)
-if selected_mood != st.session_state.data.get('mood'):
-    st.session_state.data['mood'] = selected_mood
-    save_data(st.session_state.username, st.session_state.data)
+# Tela Principal do App
+def main_app(db):
+    st.title(f"Diário de Bordo de {st.session_state.username}")
 
-st.divider()
-
-# Seção de Hábitos
-st.header("💪 Hábitos de Hoje")
-col1, col2 = st.columns([3, 1])
-new_habit = col1.text_input("Adicionar novo hábito",
-                            placeholder="Ex: Ler 10 páginas")
-if col2.button("Adicionar Hábito", use_container_width=True):
-    if new_habit:
-        if 'habits' not in st.session_state.data:
-            st.session_state.data['habits'] = {}
-        st.session_state.data['habits'][new_habit] = False
-        save_data(st.session_state.username, st.session_state.data)
+    if st.button("Sair"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
         st.rerun()
-
-if 'habits' in st.session_state.data and st.session_state.data['habits']:
-    for habit, completed in list(st.session_state.data['habits'].items()):
-        col_habit, col_delete = st.columns([0.9, 0.1])
-        is_checked = col_habit.checkbox(
-            habit, value=completed, key=f"habit_{habit}")
-        if is_checked != completed:
-            st.session_state.data['habits'][habit] = is_checked
-            save_data(st.session_state.username, st.session_state.data)
-
-        if col_delete.button("🗑️", key=f"del_{habit}", help=f"Remover '{habit}'"):
-            del st.session_state.data['habits'][habit]
-            save_data(st.session_state.username, st.session_state.data)
-            st.rerun()
-else:
-    st.write("Nenhum hábito adicionado para hoje.")
-
-st.divider()
-
-# Seção de Tarefas
-st.header("✅ Tarefas do Dia (To-Do)")
-col1_task, col2_task = st.columns([3, 1])
-new_task = col1_task.text_input(
-    "Adicionar nova tarefa", placeholder="Ex: Pagar a conta de luz")
-if col2_task.button("Adicionar Tarefa", use_container_width=True):
-    if new_task:
-        if 'tasks' not in st.session_state.data:
-            st.session_state.data['tasks'] = []
-        st.session_state.data['tasks'].append(
-            {'text': new_task, 'completed': False})
-        save_data(st.session_state.username, st.session_state.data)
+    
+    # Pega os dados do dia
+    daily_doc_snapshot = get_or_create_daily_doc(db, st.session_state.username)
+    daily_data = daily_doc_snapshot.to_dict()
+    doc_ref = daily_doc_snapshot.reference
+    
+    # --- Seção de Humor ---
+    st.header("🙂 Como você está se sentindo hoje?")
+    moods = ["", "Excelente", "Bem", "Normal", "Mal", "Terrível"]
+    current_mood_index = moods.index(daily_data.get('mood', '')) if daily_data.get('mood') in moods else 0
+    
+    mood = st.selectbox("Seu humor:", moods, index=current_mood_index)
+    if mood != daily_data.get('mood'):
+        doc_ref.update({'mood': mood})
+        st.success("Humor atualizado!")
         st.rerun()
+        
+    # --- Seção de Hábitos ---
+    st.header("💪 Hábitos Diários")
+    
+    habits_list = ["Ler", "Meditar", "Exercício", "Beber 2L de água"] 
+    habits_data = daily_data.get('habits', {})
 
-if 'tasks' in st.session_state.data and st.session_state.data['tasks']:
-    for i, task in enumerate(st.session_state.data['tasks']):
-        col_task_check, col_task_delete = st.columns([0.9, 0.1])
-        task_completed = col_task_check.checkbox(
-            f"~~{task['text']}~~" if task['completed'] else task['text'],
-            value=task['completed'],
-            key=f"task_{i}"
-        )
-        if task_completed != task['completed']:
-            st.session_state.data['tasks'][i]['completed'] = task_completed
-            save_data(st.session_state.username, st.session_state.data)
+    cols = st.columns(len(habits_list))
+    for i, habit in enumerate(habits_list):
+        with cols[i]:
+            is_done = st.checkbox(habit, value=habits_data.get(habit, False), key=f"habit_{habit}")
+            if is_done != habits_data.get(habit, False):
+                habits_data[habit] = is_done
+                doc_ref.update({'habits': habits_data})
+                st.rerun()
 
-        if col_task_delete.button("🗑️", key=f"del_task_{i}", help=f"Remover '{task['text']}'"):
-            st.session_state.data['tasks'].pop(i)
-            save_data(st.session_state.username, st.session_state.data)
+    # --- Seção de To-Do ---
+    st.header("📝 Tarefas do Dia (To-Do)")
+    todos = daily_data.get('todos', [])
+    
+    c1, c2 = st.columns([3,1])
+    with c1:
+        new_todo = st.text_input("Nova tarefa:", key="new_todo_input")
+    with c2:
+        st.write("") # Espaçamento
+        st.write("") # Espaçamento
+        if st.button("Adicionar Tarefa"):
+            if new_todo:
+                todos.append({"task": new_todo, "done": False})
+                doc_ref.update({'todos': todos})
+                st.rerun()
+
+    for i, todo in enumerate(todos):
+        col1, col2 = st.columns([0.1, 0.9])
+        with col1:
+            done = st.checkbox("", value=todo['done'], key=f"todo_{i}")
+        with col2:
+            task_text = f"~~{todo['task']}~~" if todo['done'] else todo['task']
+            st.write(task_text)
+            
+        if done != todo['done']:
+            todos[i]['done'] = done
+            doc_ref.update({'todos': todos})
             st.rerun()
-else:
-    st.write("Nenhuma tarefa para hoje.")
+            
+# --- Lógica Principal ---
+if db and not st.session_state.logged_in:
+    login_screen(db)
+elif db and st.session_state.logged_in:
+    main_app(db)
+
