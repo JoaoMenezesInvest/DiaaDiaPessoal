@@ -20,9 +20,14 @@ def init_firebase():
         # Tenta carregar as credenciais do Streamlit Secrets (para deploy)
         key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_KEY"])
         
-        # SOLUÇÃO DEFINITIVA: Define a variável de ambiente GOOGLE_CLOUD_PROJECT
-        os.environ["GOOGLE_CLOUD_PROJECT"] = key_dict.get('project_id')
-
+        # VERIFICAÇÃO EXPLÍCITA DO PROJECT_ID
+        project_id = key_dict.get('project_id')
+        if not project_id:
+            st.error("ERRO CRÍTICO: 'project_id' não foi encontrado dentro das suas credenciais do Firebase.")
+            st.info("Por favor, verifique o conteúdo do seu arquivo JSON/secret. Ele deve conter uma linha como: \"project_id\": \"seu-projeto-id\", ...")
+            st.stop()
+            
+        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
         creds = service_account.Credentials.from_service_account_info(key_dict)
         firebase_admin.initialize_app(creds)
 
@@ -31,10 +36,15 @@ def init_firebase():
         try:
             with open('firebase_key.json') as f:
                 key_dict = json.load(f)
-            
-            # SOLUÇÃO DEFINITIVA: Define a variável de ambiente GOOGLE_CLOUD_PROJECT
-            os.environ["GOOGLE_CLOUD_PROJECT"] = key_dict.get('project_id')
-            
+
+            # VERIFICAÇÃO EXPLÍCITA DO PROJECT_ID
+            project_id = key_dict.get('project_id')
+            if not project_id:
+                st.error("ERRO CRÍTICO: 'project_id' não foi encontrado no seu arquivo 'firebase_key.json'.")
+                st.info("Por favor, verifique o conteúdo do seu arquivo. Ele deve conter uma linha como: \"project_id\": \"seu-projeto-id\", ...")
+                st.stop()
+
+            os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
             creds = service_account.Credentials.from_service_account_info(key_dict)
             firebase_admin.initialize_app(creds)
 
